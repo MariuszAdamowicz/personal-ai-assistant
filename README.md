@@ -16,3 +16,10 @@ This project is about building a personal AI assistant using the OpenAI API. The
 
 3. Start coding :-)
 
+
+
+## Run App
+
+```bash
+poetry run start
+```
