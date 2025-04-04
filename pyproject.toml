@@ -1,0 +1,24 @@
+[project]
+name = "my-agent"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "MariuszAdamowicz",email = "mariusz.ad@interia.pl"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "python-telegram-bot (>=22.0,<23.0)",
+    "python-dotenv (>=1.1.0,<2.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "my_agent", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+start = "my_agent.my_agent:main"

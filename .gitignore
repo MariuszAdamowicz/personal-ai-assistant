@@ -1,2 +1,28 @@
 node_modules/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Poetry virtualenvs (optional, if not using inside project dir)
+# .cache/pypoetry/
+
+# VS Code settings
+.vscode/
+
+# PyCharm
+.idea/
+
+# dotenv environment variables
 .env
+.env.*
+
+# pytest
+.pytest_cache/
+
+# Logs
+*.log
+
+# Mac system files
+.DS_Store
