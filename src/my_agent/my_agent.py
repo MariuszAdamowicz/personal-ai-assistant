@@ -19,12 +19,12 @@ def main():
     load_dotenv()
     
     # openai_key = os.getenv("OPENAI_API_KEY")
-    # print(f"OpenAI: {openai_key}")    # For Debug only; Remove from prod release
+    # print(f"OpenAI: {openai_key}")    # For Debug only; TODO: Remove from prod release
     # assert openai_key is not None, "Missing OpenAI Key"
 
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    print(f"Telegram: {telegram_token}")    # For Debug only; Remove from prod release
-    assert telegram_token is not None, "Missing Telegram Token"
+    print(f"Telegram: {telegram_token}")    # For Debug only; TODO: Remove from prod release
+    assert telegram_token is not None, "Telegram token is missing. Check the TELEGRAM_BOT_TOKEN environment variable."
     
     application = ApplicationBuilder().token(telegram_token).build()
 
