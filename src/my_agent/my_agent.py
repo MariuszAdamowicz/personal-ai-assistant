@@ -6,6 +6,7 @@ from telegram.ext import filters, MessageHandler, ApplicationBuilder, CommandHan
 import openai
 
 MODEL = "llama-3.3-70b-versatile"
+BASE_CONTEXT = "you are a helpful bot."
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -17,10 +18,14 @@ def create_start_function(model):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"I'm a bot, please talk to me!\nI'm using model {model}!")
     return start
 
-def create_echo_function(groq_client, model):
+def create_echo_function(groq_client, model, base_context):
     async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_completion = groq_client.chat.completions.create(
             messages=[
+                {
+                    "role": "system",
+                    "content": base_context
+                },
                 {
                     "role": "user",
                     "content": update.message.text,
@@ -48,7 +53,7 @@ def main():
     application = ApplicationBuilder().token(telegram_token).build()
 
     start_handler = CommandHandler('start', create_start_function(MODEL))
-    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, MODEL))
+    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, MODEL, BASE_CONTEXT))
 
     application.add_handler(start_handler)
     application.add_handler(echo_handler)
