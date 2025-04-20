@@ -3,33 +3,57 @@ import os
 import logging
 from telegram import Update
 from telegram.ext import filters, MessageHandler, ApplicationBuilder, CommandHandler, ContextTypes
+import openai
+
+MODEL = "llama-3.3-70b-versatile"
+BASE_CONTEXT = "you are a helpful bot."
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="I'm a bot, please talk to me!")
+def create_start_function(model):
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"I'm a bot, please talk to me!\nI'm using model {model}!")
+    return start
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=update.message.text)
+def create_echo_function(groq_client, model, base_context):
+    async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": base_context
+                },
+                {
+                    "role": "user",
+                    "content": update.message.text,
+                }
+            ],
+            model=model,
+        )
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=chat_completion.choices[0].message.content)
+    return echo
 
 def main():
     load_dotenv()
-    
-    # openai_key = os.getenv("OPENAI_API_KEY")
-    # print(f"OpenAI: {openai_key}")    # For Debug only; TODO: Remove from prod release
-    # assert openai_key is not None, "Missing OpenAI Key"
 
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
     print(f"Telegram: {telegram_token}")    # For Debug only; TODO: Remove from prod release
     assert telegram_token is not None, "Telegram token is missing. Check the TELEGRAM_BOT_TOKEN environment variable."
+
+    groq_token = os.getenv("GROQ_API_KEY")
+    assert groq_token is not None, "Groq token is missing. Check the GROQ_API_KEY environment variable."
+    groq_client = openai.OpenAI(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=groq_token
+    )
     
     application = ApplicationBuilder().token(telegram_token).build()
 
-    start_handler = CommandHandler('start', start)
-    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), echo)
+    start_handler = CommandHandler('start', create_start_function(MODEL))
+    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, MODEL, BASE_CONTEXT))
 
     application.add_handler(start_handler)
     application.add_handler(echo_handler)
@@ -38,4 +62,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

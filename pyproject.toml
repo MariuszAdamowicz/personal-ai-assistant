@@ -9,7 +9,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "python-telegram-bot (>=22.0,<23.0)",
-    "python-dotenv (>=1.1.0,<2.0.0)"
+    "python-dotenv (>=1.1.0,<2.0.0)",
+    "groq (>=0.22.0,<0.23.0)",
+    "openai (>=1.75.0,<2.0.0)"
 ]
 
 [tool.poetry]
