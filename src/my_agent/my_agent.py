@@ -1,6 +1,8 @@
 import json
 from typing import List, Dict
 
+from PIL import Image
+from io import BytesIO
 from dotenv import load_dotenv
 import os
 import logging
@@ -9,8 +11,10 @@ from telegram.ext import filters, MessageHandler, ApplicationBuilder, CommandHan
 import openai
 
 from src.my_agent.chat_context_manager import ChatContextManager
+import requests
 
 MODEL = "llama-3.3-70b-versatile"
+PHOTO_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 BASE_CONTEXT = "You are a helpful bot."
 MAX_HISTORY_MESSAGES = 20
 GROUP_SIZE_LEVEL_0 = 5
@@ -22,9 +26,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-def create_start_function(model):
+def create_start_function(model, photo_model):
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"I'm a bot, please talk to me!\nI'm using model {model}!")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"I'm a bot, please talk to me!\nI'm using model {model}!\nFor photo I'm using model {photo_model}!")
     return start
 
 def create_echo_function(groq_client, model, base_context, ctx: ChatContextManager):
@@ -40,6 +44,53 @@ def create_echo_function(groq_client, model, base_context, ctx: ChatContextManag
         await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
     return echo
 
+def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
+    async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        idx = len(update.message.photo)-1
+        file_id = update.message.photo[idx].file_id
+        file = await context.bot.getFile(file_id)
+        location = file.file_path
+        caption = update.message.caption
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an assistant specialized in analyzing and describing images in detail."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What's in this image?"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": location
+                        }
+                    }
+                ]
+            }
+        ]
+
+        if caption:
+            messages.append({
+                "role": "user",
+                "content": caption
+            })
+
+        if is_this_image(location):
+            completion = groq_client.chat.completions.create(
+                messages=messages,
+                model=photo_model,
+            )
+            response = completion.choices[0].message.content
+            ctx.add_message("user", response)
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+        else:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="The specified file is not an image.")
+    return photo
+
 def generate_summary(groq_client, model):
     def summarize(messages: List[Dict[str, str]]) -> str:
         response = groq_client.chat.completions.create(
@@ -51,6 +102,16 @@ def generate_summary(groq_client, model):
         )
         return response.choices[0].message.content.strip()
     return summarize
+
+def is_this_image(url):
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        Image.open(BytesIO(response.content))
+        return True
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
 
 def main():
     load_dotenv()
@@ -66,6 +127,7 @@ def main():
     )
 
     model = os.getenv("MODEL", MODEL)
+    photo_model = os.getenv("PHOTO_MODEL", PHOTO_MODEL)
     base_context = os.getenv("BASE_CONTEXT", BASE_CONTEXT)
     max_history_messages = int(os.getenv("MAX_HISTORY_MESSAGES", MAX_HISTORY_MESSAGES))
     group_size_level_0 = int(os.getenv("GROUP_SIZE_LEVEL_0", GROUP_SIZE_LEVEL_0))
@@ -84,11 +146,13 @@ def main():
     
     application = ApplicationBuilder().token(telegram_token).build()
 
-    start_handler = CommandHandler('start', create_start_function(model))
+    start_handler = CommandHandler('start', create_start_function(model, photo_model))
     echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, model, base_context, ctx))
+    photo_handler = MessageHandler(filters.PHOTO, create_photo_function(groq_client, photo_model, ctx))
 
     application.add_handler(start_handler)
     application.add_handler(echo_handler)
+    application.add_handler(photo_handler)
 
     application.run_polling()
 
