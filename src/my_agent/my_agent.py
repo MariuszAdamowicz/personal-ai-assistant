@@ -12,9 +12,12 @@ import openai
 
 from src.my_agent.chat_context_manager import ChatContextManager
 import requests
+import tempfile
+import subprocess
 
 MODEL = "llama-3.3-70b-versatile"
 PHOTO_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+TRANSCRIPTION_MODEL = "whisper-large-v3-turbo"
 BASE_CONTEXT = "You are a helpful bot."
 MAX_HISTORY_MESSAGES = 20
 GROUP_SIZE_LEVEL_0 = 5
@@ -26,6 +29,26 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+async def handle_chat_response(text, update, context, ctx, model, base_context, groq_client):
+    try:
+        logging.debug(f"handle_chat_response: input text: {text}")
+        ctx.add_message("user", text)
+        context_messages = ctx.get_context(system_prompt=base_context)
+        logging.debug(f"handle_chat_response: prompt/context: {context_messages}")
+        logging.debug(f"handle_chat_response: using model: {model}")
+        chat_completion = groq_client.chat.completions.create(
+            messages=context_messages,
+            model=model,
+        )
+        logging.debug(f"handle_chat_response: completion object: {chat_completion}")
+        response = chat_completion.choices[0].message.content
+        logging.debug(f"handle_chat_response: generated response: {response}")
+        ctx.add_message("assistant", response)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+    except Exception as e:
+        logging.error(f"Error in handle_chat_response: {e}", exc_info=True)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, something went wrong while generating a response.")
+
 def create_start_function(model, photo_model):
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"I'm a bot, please talk to me!\nI'm using model {model}!\nFor photo I'm using model {photo_model}!")
@@ -33,15 +56,7 @@ def create_start_function(model, photo_model):
 
 def create_echo_function(groq_client, model, base_context, ctx: ChatContextManager):
     async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        ctx.add_message("user", update.message.text)
-        context_messages = ctx.get_context(system_prompt=base_context)
-        chat_completion = groq_client.chat.completions.create(
-            messages=context_messages,
-            model=model,
-        )
-        response = chat_completion.choices[0].message.content
-        ctx.add_message("assistant", response)
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+        await handle_chat_response(update.message.text, update, context, ctx, model, base_context, groq_client)
     return echo
 
 def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
@@ -99,6 +114,59 @@ def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
             await context.bot.send_message(chat_id=update.effective_chat.id, text="The specified file is not an image.")
     return photo
 
+def create_transcription_function(groq_client, transcription_model, ctx: ChatContextManager):
+    async def transcription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        file_id = update.message.voice.file_id
+        file = await context.bot.getFile(file_id)
+        location = file.file_path
+        logging.info(f"Received audio with file path: {location}")
+
+        try:
+            response = requests.get(location, timeout=10)
+            response.raise_for_status()
+
+            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_file:
+                ogg_file.write(response.content)
+                ogg_path = ogg_file.name
+
+            mp3_path = ogg_path.replace(".ogg", ".mp3")
+            subprocess.run([
+                "ffmpeg",
+                "-y",
+                "-i", ogg_path,
+                "-acodec", "libmp3lame",
+                mp3_path
+            ], check=True)
+
+            with open(mp3_path, "rb") as mp3_file:
+                transcript = groq_client.audio.transcriptions.create(
+                    file=mp3_file,
+                    model=transcription_model,
+                )
+                response = transcript.text
+                logging.debug(f"Transcript result: {response!r}")
+                ctx.add_message("user", response)
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+                if not response.strip():
+                    logging.warning("Transcript was empty, skipping chat response.")
+                    return
+
+            logging.info("Calling handle_chat_response with transcript result.")
+            await handle_chat_response(response, update, context, ctx, MODEL, BASE_CONTEXT, groq_client)
+
+        except Exception as e:
+            logging.error(f"Error during transcription: {e}")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, something went wrong while transcribing the audio.")
+
+        finally:
+            try:
+                os.remove(ogg_path)
+                os.remove(mp3_path)
+            except Exception as e:
+                logging.warning(f"Could not delete temporary files: {e}")
+
+    return transcription
+
 def generate_summary(groq_client, model):
     def summarize(messages: List[Dict[str, str]]) -> str:
         response = groq_client.chat.completions.create(
@@ -136,6 +204,7 @@ def main():
 
     model = os.getenv("MODEL", MODEL)
     photo_model = os.getenv("PHOTO_MODEL", PHOTO_MODEL)
+    transcription_model = os.getenv("TRANSCRIPTION_MODEL", TRANSCRIPTION_MODEL)
     base_context = os.getenv("BASE_CONTEXT", BASE_CONTEXT)
     max_history_messages = int(os.getenv("MAX_HISTORY_MESSAGES", MAX_HISTORY_MESSAGES))
     group_size_level_0 = int(os.getenv("GROUP_SIZE_LEVEL_0", GROUP_SIZE_LEVEL_0))
@@ -157,10 +226,12 @@ def main():
     start_handler = CommandHandler('start', create_start_function(model, photo_model))
     echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, model, base_context, ctx))
     photo_handler = MessageHandler(filters.PHOTO, create_photo_function(groq_client, photo_model, ctx))
+    transcription_handler = MessageHandler(filters.VOICE, create_transcription_function(groq_client, transcription_model, ctx))
 
     application.add_handler(start_handler)
     application.add_handler(echo_handler)
     application.add_handler(photo_handler)
+    application.add_handler(transcription_handler)
 
     application.run_polling()
 

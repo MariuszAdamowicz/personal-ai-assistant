@@ -614,6 +614,18 @@ files = [
 typing-extensions = ">=4.6.0,<4.7.0 || >4.7.0"
 
 [[package]]
+name = "pydub"
+version = "0.25.1"
+description = "Manipulate audio with an simple and easy high level interface"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6"},
+    {file = "pydub-0.25.1.tar.gz", hash = "sha256:980a33ce9949cab2a569606b65674d748ecbca4f0796887fd6f46173a7b0d30f"},
+]
+
+[[package]]
 name = "python-dotenv"
 version = "1.1.0"
 description = "Read key-value pairs from a .env file and set them as environment variables"
@@ -758,4 +770,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13"
-content-hash = "abae5d8aa02b80e83d41394f2f04555aec3b4465e05aa7279c0a898634853150"
+content-hash = "fd7d21606cd8c258810b8323b93f15442edec6d096e985b1b8f2ccd01edfbcea"
