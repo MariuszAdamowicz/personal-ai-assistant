@@ -51,6 +51,8 @@ def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
         file = await context.bot.getFile(file_id)
         location = file.file_path
         caption = update.message.caption
+        logging.info(f"Received photo with file path: {location}")
+        logging.info(f"Caption: {caption}")
         messages = [
             {
                 "role": "system",
@@ -79,14 +81,20 @@ def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
                 "content": caption
             })
 
-        if is_this_image(location):
-            completion = groq_client.chat.completions.create(
-                messages=messages,
-                model=photo_model,
-            )
-            response = completion.choices[0].message.content
-            ctx.add_message("user", response)
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+        logging.info("Checking if the file is a valid image...")
+        if is_valid_image(location):
+            logging.info(f"Image passed validation: {location}")
+            try:
+                completion = groq_client.chat.completions.create(
+                    messages=messages,
+                    model=photo_model,
+                )
+                response = completion.choices[0].message.content
+                ctx.add_message("user", response)
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+            except Exception as e:
+                logging.error(f"Error during image completion: {e}")
+                await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, something went wrong while analyzing the image.")
         else:
             await context.bot.send_message(chat_id=update.effective_chat.id, text="The specified file is not an image.")
     return photo
@@ -103,14 +111,14 @@ def generate_summary(groq_client, model):
         return response.choices[0].message.content.strip()
     return summarize
 
-def is_this_image(url):
+def is_valid_image(url):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         Image.open(BytesIO(response.content))
         return True
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(f"Image validation failed for URL {url}: {e}")
         return False
 
 def main():
