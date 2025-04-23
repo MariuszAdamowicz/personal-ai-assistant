@@ -14,8 +14,12 @@ from src.my_agent.chat_context_manager import ChatContextManager
 import requests
 import tempfile
 import subprocess
+from tavily import TavilyClient
 
-MODEL = "llama-3.3-70b-versatile"
+from src.my_agent.tools.tool import Tool
+from src.my_agent.tools.web_search_tool import WebSearchTool
+
+MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"  # "llama-3.3-70b-versatile"
 PHOTO_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 TRANSCRIPTION_MODEL = "whisper-large-v3-turbo"
 BASE_CONTEXT = "You are a helpful bot."
@@ -29,22 +33,66 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-async def handle_chat_response(text, update, context, ctx, model, base_context, groq_client):
+async def handle_chat_response(text, update, context, ctx, model, base_context, groq_client, tools: Dict[str, Tool]):
     try:
         logging.debug(f"handle_chat_response: input text: {text}")
         ctx.add_message("user", text)
-        context_messages = ctx.get_context(system_prompt=base_context)
+        tools_context = " ".join([tool.base_context() for tool in tools.values()])
+        context_messages = ctx.get_context(system_prompt=f"{base_context} {tools_context} Use the available tools when necessary. Do not generate tool calls manually — use tool_calls field.")
         logging.debug(f"handle_chat_response: prompt/context: {context_messages}")
         logging.debug(f"handle_chat_response: using model: {model}")
+        # await context.bot.send_message(chat_id=update.effective_chat.id, text=f">>>>>>>message: {context_messages}\nmodel: {model}\ntools: {[tool.description() for tool in tools.values()]}\ntool_choice: auto")
         chat_completion = groq_client.chat.completions.create(
             messages=context_messages,
             model=model,
+            tools=[tool.description() for tool in tools.values()],
+            tool_choice="auto"
         )
         logging.debug(f"handle_chat_response: completion object: {chat_completion}")
         response = chat_completion.choices[0].message.content
         logging.debug(f"handle_chat_response: generated response: {response}")
-        ctx.add_message("assistant", response)
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+
+        tool_calls = chat_completion.choices[0].message.tool_calls
+        logging.debug(f"handle_chat_response: generated tool_calls: {tool_calls}")
+        msg = chat_completion.choices[0].message
+        # await context.bot.send_message(chat_id=update.effective_chat.id, text=str(msg))
+        if tool_calls:
+            context_messages.append({
+                "role": "assistant",
+                "content": response
+            })
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_to_call = tools[function_name]
+                function_args = json.loads(tool_call.function.arguments)
+                logging.debug(f"handle_chat_response: tool_call function name: {function_name}; args: {function_args}")
+                # await context.bot.send_message(chat_id=update.effective_chat.id, text=f">>>{function_name}: {function_args}<<<")
+                # Call the tool and get the response
+                function_response = function_to_call.call(
+                    parameters=function_args
+                )
+                logging.debug(f"handle_chat_response: {function_name} function response: {function_response}")
+                # Add the tool response to the conversation
+                context_messages.append(
+                    {
+                        "role": "tool", # Indicates this message is from tool use
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(function_response),
+                    }
+                )
+            # Make a second API call with the updated conversation
+            second_response = groq_client.chat.completions.create(
+                model=model,
+                messages=context_messages
+            )
+            logging.debug(f"handle_chat_response: second completion object: {second_response}")
+            # Return the final response
+            second_content = second_response.choices[0].message.content
+            ctx.add_message("assistant", second_content)
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=second_content)
+        else:
+            ctx.add_message("assistant", response)
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=response)
     except Exception as e:
         logging.error(f"Error in handle_chat_response: {e}", exc_info=True)
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, something went wrong while generating a response.")
@@ -54,9 +102,12 @@ def create_start_function(model, photo_model):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"I'm a bot, please talk to me!\nI'm using model {model}!\nFor photo I'm using model {photo_model}!")
     return start
 
-def create_echo_function(groq_client, model, base_context, ctx: ChatContextManager):
+def create_echo_function(groq_client, model, base_context, ctx: ChatContextManager, tools):
     async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await handle_chat_response(update.message.text, update, context, ctx, model, base_context, groq_client)
+        if not update.message or not update.message.text:
+            logging.warning("No message or text found in update.")
+            return
+        await handle_chat_response(update.message.text, update, context, ctx, model, base_context, groq_client, tools)
     return echo
 
 def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
@@ -114,7 +165,7 @@ def create_photo_function(groq_client, photo_model, ctx: ChatContextManager):
             await context.bot.send_message(chat_id=update.effective_chat.id, text="The specified file is not an image.")
     return photo
 
-def create_transcription_function(groq_client, transcription_model, ctx: ChatContextManager):
+def create_transcription_function(groq_client, transcription_model, ctx: ChatContextManager, tools):
     async def transcription(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_id = update.message.voice.file_id
         file = await context.bot.getFile(file_id)
@@ -152,7 +203,7 @@ def create_transcription_function(groq_client, transcription_model, ctx: ChatCon
                     return
 
             logging.info("Calling handle_chat_response with transcript result.")
-            await handle_chat_response(response, update, context, ctx, MODEL, BASE_CONTEXT, groq_client)
+            await handle_chat_response(response, update, context, ctx, MODEL, BASE_CONTEXT, groq_client, tools)
 
         except Exception as e:
             logging.error(f"Error during transcription: {e}")
@@ -189,6 +240,11 @@ def is_valid_image(url):
         logging.error(f"Image validation failed for URL {url}: {e}")
         return False
 
+def create_tools(tavily_client: TavilyClient) -> dict[str, Tool]:
+    return {
+        "web_search": WebSearchTool(tavily_client),
+    }
+
 def main():
     load_dotenv()
 
@@ -201,6 +257,9 @@ def main():
         base_url="https://api.groq.com/openai/v1",
         api_key=groq_token
     )
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    assert tavily_key is not None, "Tavily key is missing. Check the TAVILY_API_KEY environment variable."
+    tavily_client = TavilyClient(api_key=tavily_key)
 
     model = os.getenv("MODEL", MODEL)
     photo_model = os.getenv("PHOTO_MODEL", PHOTO_MODEL)
@@ -220,13 +279,15 @@ def main():
         group_size_higher_levels=group_size_higher_levels,
         max_summary_level=max_summary_level
     )
+
+    tools: Dict[str, Tool] = create_tools(tavily_client)
     
     application = ApplicationBuilder().token(telegram_token).build()
 
     start_handler = CommandHandler('start', create_start_function(model, photo_model))
-    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, model, base_context, ctx))
+    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), create_echo_function(groq_client, model, base_context, ctx, tools))
     photo_handler = MessageHandler(filters.PHOTO, create_photo_function(groq_client, photo_model, ctx))
-    transcription_handler = MessageHandler(filters.VOICE, create_transcription_function(groq_client, transcription_model, ctx))
+    transcription_handler = MessageHandler(filters.VOICE, create_transcription_function(groq_client, transcription_model, ctx, tools))
 
     application.add_handler(start_handler)
     application.add_handler(echo_handler)
